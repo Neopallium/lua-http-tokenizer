@@ -15,9 +15,15 @@ set(LUA_NATIVE_OBJECTS_PATH ../LuaNativeObjects CACHE PATH
 set(USE_PRE_GENERATED_BINDINGS TRUE CACHE BOOL
 				"Set this to FALSE to re-generate bindings using LuaNativeObjects")
 
-set(COMMON_CFLAGS "${CFLAGS}")
-set(COMMON_LDFLAGS)
-set(COMMON_LIBS)
+set(MODULE_CFLAGS "${CFLAGS}")
+set(MODULE_LDFLAGS)
+set(MODULE_LIBS)
+
+set(LIB_CFLAGS "${CFLAGS}")
+set(LIB_LDFLAGS)
+set(LIB_LIBS)
+
+include(CustomMacros)
 
 ## LuaNativeObjects
 include(LuaNativeObjects)
@@ -27,6 +33,15 @@ include(FindLua51)
 if(NOT ${LUA51_FOUND})
 	message(FATAL_ERROR "The FindLua51 module could not find lua :-(")
 endif()
+
+set(WARN_CFLAGS "-Wall -Wextra -Wshadow -W -pedantic -Wno-overlength-strings")
+if(CMAKE_COMPILER_IS_GNUCC)
+	set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pipe ${WARN_CFLAGS} -std=gnu99 -fgnu89-inline")
+	set(CMAKE_C_FLAGS_RELEASE        "${CMAKE_C_FLAGS_RELEASE}     -O3 -march=native -g")
+	set(CMAKE_C_FLAGS_DEBUG          "${CMAKE_C_FLAGS_DEBUG}       -O0 -g")
+	set(CMAKE_C_FLAGS_PROFILE        "${CMAKE_C_FLAGS_PROFILE}     -O2 -g -DNDEBUG")
+	set(CMAKE_C_FLAGS_RELWITHDEBINFO "${CMAKE_C_FLAGS_WITHDEBINFO} -O2 -g")
+endif(CMAKE_COMPILER_IS_GNUCC)
 
 ## setup git submodules
 
@@ -48,7 +63,15 @@ include_directories(${CMAKE_CURRENT_SOURCE_DIR}
                     ${CMAKE_CURRENT_SOURCE_DIR}/src
                     ${LUA_INCLUDE_DIR})
 
-## LuaEpoll
+## HTTP Tokenizer source
+set(HTTP_TOKENIZER_SRC
+	http-parser/http_parser.c
+	http-parser/http_parser.h
+	src/http_tokenizer.c
+	src/http_tokenizer.h
+)
+
+## Lua HTTP Tokenizer
 set(LUA_HTTP_TOKENIZER_SRC
 	http_tokenizer.nobj.lua
 )
@@ -60,12 +83,20 @@ else()
 	GenLuaNativeObjects(LUA_HTTP_TOKENIZER_SRC)
 endif()
 
-add_library(lua-http_tokenizer MODULE ${LUA_HTTP_TOKENIZER_SRC}
-				src/http_tokenizer.c http-parser/http_parser.c)
-target_link_libraries(lua-http_tokenizer ${COMMON_LIBS})
+add_library(http_tokenizer SHARED ${HTTP_TOKENIZER_SRC})
+target_link_libraries(http_tokenizer ${LIB_LIBS})
+add_target_properties(http_tokenizer COMPILE_FLAGS "${LIB_CFLAGS}")
+add_target_properties(http_tokenizer LINK_FLAGS "${LD_FLAGS} ${LIB_LDFLAGS}")
+
+add_library(lua-http_tokenizer MODULE ${LUA_HTTP_TOKENIZER_SRC})
+target_link_libraries(lua-http_tokenizer http_tokenizer ${MODULE_LIBS})
+add_target_properties(lua-http_tokenizer COMPILE_FLAGS "${MODULE_CFLAGS}")
+add_target_properties(lua-http_tokenizer LINK_FLAGS "${LD_FLAGS} ${MODULE_LDFLAGS}")
 set_target_properties(lua-http_tokenizer PROPERTIES PREFIX "")
-set_target_properties(lua-http_tokenizer PROPERTIES COMPILE_FLAGS "${COMMON_CFLAGS}")
 set_target_properties(lua-http_tokenizer PROPERTIES OUTPUT_NAME http_tokenizer)
+
+install(TARGETS http_tokenizer
+				DESTINATION lib)
 
 install(TARGETS lua-http_tokenizer
         DESTINATION "${INSTALL_CMOD}")
