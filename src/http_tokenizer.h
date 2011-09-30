@@ -11,6 +11,8 @@
 #define HT_LIB_API extern
 #define HT_INLINE static inline
 
+#define HTTP_TOKENIZER_MAX_TOKENS		4096
+
 #define HTTP_TOKEN_MESSAGE_BEGIN      0
 #define HTTP_TOKEN_URL                1
 #define HTTP_TOKEN_HEADER_FIELD       2
@@ -26,7 +28,7 @@ typedef uint32_t httplen_t;
 
 typedef struct http_token http_token;
 struct http_token {
-	int         id;   /**< token id. */
+	uint16_t    id;   /**< token id. */
 	httpoff_t   off;  /**< token offset. */
 	httplen_t   len;  /**< token length. */
 };
@@ -57,9 +59,11 @@ HT_LIB_API void http_tokenizer_free(http_tokenizer *tokenizer);
  */
 HT_LIB_API void http_tokenizer_reset(http_tokenizer* tokenizer);
 
-HT_LIB_API size_t http_tokenizer_execute(http_tokenizer* tokenizer, const char *data, size_t len);
+HT_LIB_API uint32_t http_tokenizer_execute(http_tokenizer* tokenizer, const char *data, uint32_t len);
 
-HT_LIB_API const http_token *http_tokenizer_get_tokens(http_tokenizer* tokenizer, uint32_t *count);
+HT_LIB_API const http_token *http_tokenizer_get_tokens(http_tokenizer* tokenizer);
+
+HT_LIB_API uint32_t http_tokenizer_count_tokens(http_tokenizer* tokenizer);
 
 HT_LIB_API int http_tokenizer_should_keep_alive(http_tokenizer* tokenizer);
 

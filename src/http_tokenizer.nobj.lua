@@ -20,31 +20,64 @@
 
 local http_tokenizer_type = [[
 
+typedef struct http_parser http_parser;
+struct http_parser {
+  /** PRIVATE **/
+  unsigned char type : 2;
+  unsigned char flags : 6; /* F_* values from 'flags' enum; semi-public */
+  unsigned char state;
+  unsigned char header_state;
+  unsigned char index;
+
+  uint32_t nread;
+  int64_t content_length;
+
+  /** READ-ONLY **/
+  unsigned short http_major;
+  unsigned short http_minor;
+  unsigned short status_code; /* responses only */
+  unsigned char method;    /* requests only */
+  unsigned char http_errno : 7;
+
+  /* 1 = Upgrade header was present and the parser has exited because of that.
+   * 0 = No upgrade header present.
+   * Should be checked when http_parser_execute() returns in addition to
+   * error checking.
+   */
+  unsigned char upgrade : 1;
+
+  /** PUBLIC **/
+  void *data; /* A pointer to get hook to the "connection" or "socket" object */
+};
+
 typedef uint32_t httpoff_t;
 typedef uint32_t httplen_t;
 
 typedef struct http_token http_token;
 struct http_token {
-	int         id;
+	uint16_t    id;
 	httpoff_t   off;
 	httplen_t   len;
 }
 
 typedef struct http_tokenizer http_tokenizer;
+struct http_tokenizer {
+	http_parser parser;   /**< embedded http_parser. */
+	http_token  *tokens;  /**< array of parsed tokens. */
+	uint32_t    count;    /**< number of parsed tokens. */
+	uint32_t    len;      /**< length of tokens array. */
+};
+
+const http_token *http_tokenizer_get_tokens(http_tokenizer* tokenizer);
+
+uint32_t http_tokenizer_count_tokens(http_tokenizer* tokenizer);
 
 ]]
 
 object "http_tokenizer" {
 	include"http_tokenizer.h",
 	-- register epoll & http_tokenizer datastures with FFI.
-	ffi_cdef(http_parser_type),
 	ffi_cdef(http_tokenizer_type),
-  constructor {
-		var_in{ "bool", "is_request", is_optional = true },
-		c_source[[
-	${this} = http_tokenizer_new(${is_request});
-]],
-  },
   destructor {
 		c_source[[
 	http_tokenizer_free(${this});
@@ -56,13 +89,42 @@ object "http_tokenizer" {
   },
 
   method "execute" {
-		c_method_call "size_t" "http_tokenizer_execute" { "const char *", "data", "size_t", "#data" },
+		c_method_call "uint32_t" "http_tokenizer_execute" { "const char *", "data", "uint32_t", "#data" },
   },
 
---[[
-  method "get_tokens" {
+  method "parse" {
+		var_in{"<any>", "cbs"},
+		var_in{"const char *", "data"},
+		c_source[[
+	const http_token *tokens = http_tokenizer_get_tokens(${this});
+	uint32_t count = http_tokenizer_count_tokens(${this});
+	uint32_t n;
+	luaL_checktype(L, ${cbs::idx}, LUA_TFUNCTION);
+	for(n = 0; n < count; n++, tokens++) {
+		lua_pushvalue(L, ${cbs::idx});
+		lua_pushinteger(L, tokens->id);
+		if(tokens->len > 0) {
+			lua_pushlstring(L, ${data} + tokens->off, tokens->len);
+			lua_call(L, 2, 0);
+		} else {
+			lua_call(L, 1, 0);
+		}
+	}
+]],
+		ffi_source[[
+	local count = tonumber(${this}.count)
+	-- call function with each event <id, cbs> pairs.
+	for n=0,(count-1) do
+		local len = ${this}.tokens[n].len
+		if len > 0 then
+			local start = ${this}.tokens[n].off+1
+			${cbs}(${this}.tokens[n].id, ${data}:sub(start, start + len - 1))
+		else
+			${cbs}(${this}.tokens[n].id)
+		end
+	end
+]],
   },
---]]
 
   method "should_keep_alive" {
 		c_method_call "bool" "http_tokenizer_should_keep_alive" {},
