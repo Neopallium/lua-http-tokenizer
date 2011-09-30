@@ -1,5 +1,21 @@
 #include <assert.h>
+#include <stdlib.h>
+
 #include "http_tokenizer.h"
+
+#include "http-parser/http_parser.h"
+
+/**
+ * HTTP tokenizer object.
+ *
+ * @ingroup Objects
+ */
+struct http_tokenizer {
+	http_parser parser;   /**< embedded http_parser. */
+	http_token  *tokens;  /**< array of parsed tokens. */
+	uint32_t    count;    /**< number of parsed tokens. */
+	uint32_t    len;      /**< length of tokens array. */
+};
 
 #define INIT_TOKENS 32
 #define GROW_TOKENS 128
@@ -66,11 +82,11 @@ static int http_tokenizer_url_cb(http_parser* parser, const char* data, size_t l
 }
 
 static int http_tokenizer_header_field_cb(http_parser* parser, const char* data, size_t len) {
-	return http_push_data_token(parser, HTTP_TOKEN_HEADER, data, len);
+	return http_push_data_token(parser, HTTP_TOKEN_HEADER_FIELD, data, len);
 }
 
 static int http_tokenizer_header_value_cb(http_parser* parser, const char* data, size_t len) {
-	return http_push_data_token(parser, HTTP_TOKEN_HEADER, data, len);
+	return http_push_data_token(parser, HTTP_TOKEN_HEADER_VALUE, data, len);
 }
 
 static int http_tokenizer_headers_complete_cb(http_parser* parser) {
@@ -82,25 +98,33 @@ static int http_tokenizer_body_cb(http_parser* parser, const char* data, size_t 
 }
 
 static int http_tokenizer_message_complete_cb(http_parser* parser) {
-	http_push_data_token(parser, HTTP_TOKEN_BODY, NULL, 0);
 	return http_push_token(parser, HTTP_TOKEN_MESSAGE_COMPLETE);
 }
 
 static void http_tokenizer_reset_internal(http_tokenizer* tokenizer) {
 	http_parser* parser = &(tokenizer->parser);
 
+	tokenizer->count = 0;
 	http_parser_init(parser, parser->type);
 	parser->data = NULL;
 }
 
-void http_tokenizer_init(http_tokenizer* tokenizer, enum http_parser_type type) {
-	http_parser* parser = &(tokenizer->parser);
+http_tokenizer *http_tokenizer_new(int is_request) {
+	http_tokenizer* tokenizer;
+	http_parser* parser;
 	uint32_t len = INIT_TOKENS;
 
-	tokenizer->tokens = (http_token *)calloc(tokenizer->tokens, len, sizeof(http_token));
+	tokenizer = (http_tokenizer *)malloc(sizeof(http_tokenizer));
+	tokenizer->tokens = (http_token *)calloc(len, sizeof(http_token));
 	tokenizer->len = len;
 	tokenizer->count = 0;
-	parser->type = type;
+	/* init. http parser. */
+	parser = &(tokenizer->parser);
+	if(is_request) {
+		parser->type = HTTP_REQUEST;
+	} else {
+		parser->type = HTTP_RESPONSE;
+	}
 	http_tokenizer_reset(tokenizer);
 }
 
@@ -108,11 +132,10 @@ void http_tokenizer_reset(http_tokenizer* tokenizer) {
 	http_tokenizer_reset(tokenizer);
 }
 
-void http_tokenizer_cleanup(http_tokenizer* tokenizer) {
+void http_tokenizer_free(http_tokenizer* tokenizer) {
 	free(tokenizer->tokens);
 	tokenizer->tokens = NULL;
-	tokenizer->count = 0;
-	tokenizer->len = 0;
+	free(tokenizer);
 }
 
 size_t http_tokenizer_execute(http_tokenizer* tokenizer, const char *data, size_t len) {
@@ -128,8 +151,13 @@ size_t http_tokenizer_execute(http_tokenizer* tokenizer, const char *data, size_
 		.on_message_complete = http_tokenizer_message_complete_cb
 	};
 
-	parser->data = data;
+	parser->data = (void *)data;
 	return http_parser_execute(parser, &settings, data, len);
+}
+
+const http_token *http_tokenizer_get_tokens(http_tokenizer* tokenizer, uint32_t *count) {
+	*count = tokenizer->count;
+	return tokenizer->tokens;
 }
 
 int http_tokenizer_should_keep_alive(http_tokenizer* tokenizer) {

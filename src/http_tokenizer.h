@@ -5,7 +5,8 @@
 #ifndef __HTTP_TOKENIZER_H__
 #define __HTTP_TOKENIZER_H__
 
-#include "http-parser/http_parser.h"
+#include <stddef.h>
+#include <stdint.h>
 
 #define HT_LIB_API extern
 #define HT_INLINE static inline
@@ -25,22 +26,12 @@ typedef uint32_t httplen_t;
 
 typedef struct http_token http_token;
 struct http_token {
-	int         id;
-	httpoff_t   off;
-	httplen_t   len;
-}
+	int         id;   /**< token id. */
+	httpoff_t   off;  /**< token offset. */
+	httplen_t   len;  /**< token length. */
+};
 
-/**
- *
- * @ingroup Objects
- */
 typedef struct http_tokenizer http_tokenizer;
-struct http_tokenizer {
-	http_parser parser;     /* embedded http_parser. */
-	http_token  *tokens;
-	uint32_t    count;
-	uint32_t    len;
-}
 
 /**
  * Initialize HTTP tokenizer.
@@ -48,7 +39,15 @@ struct http_tokenizer {
  * @param tokenizer pointer to http_tokenizer structure to be initialized.
  * @public @memberof http_tokenizer
  */
-HT_LIB_API void http_tokenizer_init(http_tokenizer *tokenizer, int );
+HT_LIB_API http_tokenizer *http_tokenizer_new(int is_request);
+
+/**
+ * Free instance of http_tokenizer.
+ *
+ * @param tokenizer pointer to http_tokenizer instance to free
+ * @public @memberof http_tokenizer
+ */
+HT_LIB_API void http_tokenizer_free(http_tokenizer *tokenizer);
 
 /**
  * Reset HTTP tokenizer
@@ -58,15 +57,9 @@ HT_LIB_API void http_tokenizer_init(http_tokenizer *tokenizer, int );
  */
 HT_LIB_API void http_tokenizer_reset(http_tokenizer* tokenizer);
 
-/**
- * Cleanup http_tokenizer structure.
- *
- * @param tokenizer pointer to http_tokenizer structure to be cleaned-up.
- * @public @memberof http_tokenizer
- */
-HT_LIB_API void http_tokenizer_cleanup(http_tokenizer *tokenizer);
-
 HT_LIB_API size_t http_tokenizer_execute(http_tokenizer* tokenizer, const char *data, size_t len);
+
+HT_LIB_API const http_token *http_tokenizer_get_tokens(http_tokenizer* tokenizer, uint32_t *count);
 
 HT_LIB_API int http_tokenizer_should_keep_alive(http_tokenizer* tokenizer);
 
