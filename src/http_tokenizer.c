@@ -80,17 +80,14 @@ static int http_tokenizer_message_begin_cb(http_parser* parser) {
 }
 
 static int http_tokenizer_url_cb(http_parser* parser, const char* data, size_t len) {
-	if(len == 0) return 0;
 	return http_push_data_token(parser, HTTP_TOKEN_URL, data, len);
 }
 
 static int http_tokenizer_header_field_cb(http_parser* parser, const char* data, size_t len) {
-	if(len == 0) return 0;
 	return http_push_data_token(parser, HTTP_TOKEN_HEADER_FIELD, data, len);
 }
 
 static int http_tokenizer_header_value_cb(http_parser* parser, const char* data, size_t len) {
-	if(len == 0) return 0;
 	return http_push_data_token(parser, HTTP_TOKEN_HEADER_VALUE, data, len);
 }
 

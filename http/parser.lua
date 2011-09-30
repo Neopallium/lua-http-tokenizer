@@ -104,14 +104,28 @@ local function create_parser(tokenizer, cbs)
 	local field
 	local handlers = {
 		[http_tokenizer.HTTP_TOKEN_MESSAGE_BEGIN] = cbs.on_message_begin,
-		[http_tokenizer.HTTP_TOKEN_URL] = cbs.on_url,
+		[http_tokenizer.HTTP_TOKEN_URL] = function(data)
+			if data then return cbs.on_url(data) end
+		end,
 		[http_tokenizer.HTTP_TOKEN_HEADER_FIELD] = function(data)
+			if field then
+				cbs.on_header(field, '')
+			end
 			field = data
 		end,
 		[http_tokenizer.HTTP_TOKEN_HEADER_VALUE] = function(data)
-			cbs.on_header(field, data or '')
+			if data then
+				cbs.on_header(field, data)
+				field = nil
+			end
 		end,
-		[http_tokenizer.HTTP_TOKEN_HEADERS_COMPLETE] = cbs.on_headers_complete,
+		[http_tokenizer.HTTP_TOKEN_HEADERS_COMPLETE] = function(data)
+			if field then
+				cbs.on_header(field, '')
+				field = nil
+			end
+			cbs.on_headers_complete()
+		end,
 		[http_tokenizer.HTTP_TOKEN_BODY] = cbs.on_body,
 		[http_tokenizer.HTTP_TOKEN_MESSAGE_COMPLETE] = function()
 			field = nil
