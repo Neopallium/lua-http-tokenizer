@@ -6,11 +6,7 @@ c_module "http_tokenizer" {
 
 -- enable FFI bindings support.
 luajit_ffi = true,
-
-ffi_load {
-"http_tokenizer", -- default lib name.
-Windows = "libhttp_tokenizer",
-},
+luajit_ffi_load_cmodule = true,
 
 export_definitions {
 "HTTP_TOKEN_MESSAGE_BEGIN",
@@ -27,16 +23,10 @@ subfiles {
 },
 
 c_function "request" {
-	var_out{ "!http_tokenizer *", "this" },
-	c_source[[
-	${this} = http_tokenizer_new(1);
-]],
+	c_call "!http_tokenizer *" "http_tokenizer_new_request" {},
 },
 c_function "response" {
-	var_out{ "!http_tokenizer *", "this" },
-	c_source[[
-	${this} = http_tokenizer_new(0);
-]],
+	c_call "!http_tokenizer *" "http_tokenizer_new_response" {},
 },
 }
 

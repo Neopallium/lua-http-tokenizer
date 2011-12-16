@@ -112,7 +112,7 @@ static void http_tokenizer_reset_internal(http_tokenizer* tokenizer) {
 	parser->data = NULL;
 }
 
-http_tokenizer *http_tokenizer_new(int is_request) {
+static http_tokenizer *http_tokenizer_new(int is_request) {
 	http_tokenizer* tokenizer;
 	http_parser* parser;
 	uint32_t len = INIT_TOKENS;
@@ -131,6 +131,14 @@ http_tokenizer *http_tokenizer_new(int is_request) {
 	http_tokenizer_reset_internal(tokenizer);
 
 	return tokenizer;
+}
+
+http_tokenizer *http_tokenizer_new_response() {
+	return http_tokenizer_new(0);
+}
+
+http_tokenizer *http_tokenizer_new_request() {
+	return http_tokenizer_new(1);
 }
 
 void http_tokenizer_reset(http_tokenizer* tokenizer) {

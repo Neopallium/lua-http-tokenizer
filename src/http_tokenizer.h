@@ -36,12 +36,20 @@ struct http_token {
 typedef struct http_tokenizer http_tokenizer;
 
 /**
- * Initialize HTTP tokenizer.
+ * Create HTTP Response tokenizer.
  *
- * @param tokenizer pointer to http_tokenizer structure to be initialized.
+ * @return tokenizer pointer to new http_tokenizer.
  * @public @memberof http_tokenizer
  */
-HT_LIB_API http_tokenizer *http_tokenizer_new(int is_request);
+HT_LIB_API http_tokenizer *http_tokenizer_new_response();
+
+/**
+ * Create HTTP Request tokenizer.
+ *
+ * @return tokenizer pointer to new http_tokenizer.
+ * @public @memberof http_tokenizer
+ */
+HT_LIB_API http_tokenizer *http_tokenizer_new_request();
 
 /**
  * Free instance of http_tokenizer.
