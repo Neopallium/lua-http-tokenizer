@@ -17,15 +17,11 @@ dependencies = {
 	'lua >= 5.1'
 }
 build = {
-	type = 'builtin',
-	modules = {
-		http_tokenizer = {
-			sources = {
-				"http-parser/http_parser.c",
-				"src/http_tokenizer.c",
-				"src/pre_generated-http_tokenizer.nobj.c",
-			},
-		},
+	type = 'cmake',
+	variables = {
+		INSTALL_CMOD      = "$(LIBDIR)",
+		CMAKE_BUILD_TYPE  = "$(CMAKE_BUILD_TYPE)",
+		["CFLAGS:STRING"] = "$(CFLAGS)",
 	},
 	install = {
 		lua = {
