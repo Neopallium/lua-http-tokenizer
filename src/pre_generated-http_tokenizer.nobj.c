@@ -218,18 +218,10 @@ static obj_type obj_types[] = {
 
 
 #if LUAJIT_FFI
-static int nobj_udata_new_ffi(lua_State *L) {
-	size_t size = luaL_checkinteger(L, 1);
-	luaL_checktype(L, 2, LUA_TTABLE);
-	lua_settop(L, 2);
-	/* create userdata. */
-	lua_newuserdata(L, size);
-	lua_replace(L, 1);
-	/* set userdata's metatable. */
-	lua_setmetatable(L, 1);
-	return 1;
-}
 
+/* nobj_ffi_support_enabled_hint should be set to 1 when FFI support is enabled in at-least one
+ * instance of a LuaJIT state.  It should never be set back to 0. */
+static int nobj_ffi_support_enabled_hint = 0;
 static const char nobj_ffi_support_key[] = "LuaNativeObject_FFI_SUPPORT";
 static const char nobj_check_ffi_support_code[] =
 "local stat, ffi=pcall(require,\"ffi\")\n" /* try loading LuaJIT`s FFI module. */
@@ -271,6 +263,12 @@ static int nobj_check_ffi_support(lua_State *L) {
 	lua_pushstring(L, nobj_ffi_support_key);
 	lua_pushboolean(L, rc);
 	lua_rawset(L, LUA_REGISTRYINDEX);
+
+	/* turn-on hint that there is FFI code enabled. */
+	if(rc) {
+		nobj_ffi_support_enabled_hint = 1;
+	}
+
 	return rc;
 }
 
@@ -291,7 +289,7 @@ static int nobj_try_loading_ffi(lua_State *L, const char *ffi_mod_name,
 		lua_pushvalue(L, -2); /* dup C module's table. */
 		lua_pushvalue(L, priv_table); /* move priv_table to top of stack. */
 		lua_remove(L, priv_table);
-		lua_pushcfunction(L, nobj_udata_new_ffi);
+		lua_pushvalue(L, LUA_REGISTRYINDEX);
 		err = lua_pcall(L, 3, 0, 0);
 	}
 	if(err) {
@@ -456,6 +454,17 @@ static FUNC_UNUSED void obj_udata_luapush(lua_State *L, void *obj, obj_type *typ
 		lua_pushnil(L);
 		return;
 	}
+#if LUAJIT_FFI
+	lua_pushlightuserdata(L, type);
+	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+	if(nobj_ffi_support_enabled_hint && lua_isfunction(L, -1)) {
+		/* call special FFI "void *" to FFI object convertion function. */
+		lua_pushlightuserdata(L, obj);
+		lua_pushinteger(L, flags);
+		lua_call(L, 2, 1);
+		return;
+	}
+#endif
 	/* check for type caster. */
 	if(type->dcaster) {
 		(type->dcaster)(&obj, &type);
@@ -465,8 +474,12 @@ static FUNC_UNUSED void obj_udata_luapush(lua_State *L, void *obj, obj_type *typ
 	ud->obj = obj;
 	ud->flags = flags;
 	/* get obj_type metatable. */
+#if LUAJIT_FFI
+	lua_insert(L, -2); /* move userdata below metatable. */
+#else
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+#endif
 	lua_setmetatable(L, -2);
 }
 
@@ -512,6 +525,17 @@ static FUNC_UNUSED void obj_udata_luapush_weak(lua_State *L, void *obj, obj_type
 	}
 	lua_pop(L, 1);  /* pop nil. */
 
+#if LUAJIT_FFI
+	lua_pushlightuserdata(L, type);
+	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+	if(nobj_ffi_support_enabled_hint && lua_isfunction(L, -1)) {
+		/* call special FFI "void *" to FFI object convertion function. */
+		lua_pushlightuserdata(L, obj);
+		lua_pushinteger(L, flags);
+		lua_call(L, 2, 1);
+		return;
+	}
+#endif
 	/* create new userdata. */
 	ud = (obj_udata *)lua_newuserdata(L, sizeof(obj_udata));
 
@@ -519,8 +543,12 @@ static FUNC_UNUSED void obj_udata_luapush_weak(lua_State *L, void *obj, obj_type
 	ud->obj = obj;
 	ud->flags = flags;
 	/* get obj_type metatable. */
+#if LUAJIT_FFI
+	lua_insert(L, -2); /* move userdata below metatable. */
+#else
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+#endif
 	lua_setmetatable(L, -2);
 
 	/* add weak reference to object. */
@@ -625,12 +653,26 @@ static FUNC_UNUSED void * obj_simple_udata_luadelete(lua_State *L, int _index, o
 
 static FUNC_UNUSED void *obj_simple_udata_luapush(lua_State *L, void *obj, int size, obj_type *type)
 {
+#if LUAJIT_FFI
+	lua_pushlightuserdata(L, type);
+	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+	if(nobj_ffi_support_enabled_hint && lua_isfunction(L, -1)) {
+		/* call special FFI "void *" to FFI object convertion function. */
+		lua_pushlightuserdata(L, obj);
+		lua_call(L, 1, 1);
+		return obj;
+	}
+#endif
 	/* create new userdata. */
 	void *ud = lua_newuserdata(L, size);
 	memcpy(ud, obj, size);
 	/* get obj_type metatable. */
+#if LUAJIT_FFI
+	lua_insert(L, -2); /* move userdata below metatable. */
+#else
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
+#endif
 	lua_setmetatable(L, -2);
 
 	return ud;
@@ -913,7 +955,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "	end\n"
 "end\n"
 "\n"
-"local _M, _priv, udata_new = ...\n"
+"local _M, _priv, reg_table = ...\n"
 "\n"
 "local OBJ_UDATA_FLAG_OWN		= 1\n"
 "\n"
@@ -1097,12 +1139,6 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "	local objects = setmetatable({}, {__mode = \"v\"})\n"
 "	local obj_flags = {}\n"
 "\n"
-"	local obj_type = obj_mt['.type']\n"
-"	_priv[obj_type] = function(ptr)\n"
-"		if ffi.istype(\"http_tokenizer *\", ptr) then return ptr end\n"
-"		return nil\n"
-"	end\n"
-"\n"
 "	function obj_type_http_tokenizer_check(ptr)\n"
 "		return ptr\n"
 "	end\n"
@@ -1132,6 +1168,17 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "	function obj_mt:__tostring()\n"
 "		local id = obj_ptr_to_id(self)\n"
 "		return \"http_tokenizer: \" .. tostring(id)\n"
+"	end\n"
+"\n"
+"	-- type checking function for C API.\n"
+"	local obj_type = obj_mt['.type']\n"
+"	_priv[obj_type] = function(ptr)\n"
+"		if ffi.istype(\"http_tokenizer *\", ptr) then return ptr end\n"
+"		return nil\n"
+"	end\n"
+"	-- push function for C API.\n"
+"	reg_table[obj_type] = function(ptr, flags)\n"
+"		return obj_type_http_tokenizer_push(ffi.cast('http_tokenizer *',ptr), flags)\n"
 "	end\n"
 "\n"
 "end\n"
