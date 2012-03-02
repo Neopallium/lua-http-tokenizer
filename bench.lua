@@ -41,7 +41,7 @@ local function bench(name, N, func, ...)
     local diff1 = (clock() - start1)
     local diff2 = (time() - start2)
     printf("total time: %10.6f (%10.6f) seconds", diff1, diff2)
-		return diff1, diff2
+    return diff1, diff2
 end
 
 local lhp = require 'http.parser'
@@ -213,8 +213,8 @@ local function good_client(parser, data)
         local line = data[i]
         local bytes_read = parser:execute(line)
         if bytes_read ~= #line then
-					error("only ["..tostring(bytes_read).."] bytes read, expected ["..tostring(#line).."]")
-				end
+          error("only ["..tostring(bytes_read).."] bytes read, expected ["..tostring(#line).."]")
+        end
     end
 end
 
@@ -225,13 +225,13 @@ local function bad_client(parser, data)
         for i=1,#line do
             local bytes_read = parser:execute(line:sub(i,i))
             if 1 ~= bytes_read then
-							error("only ["..tostring(bytes_read).."] bytes read, expected ["..tostring(#line).."]")
-						end
+              error("only ["..tostring(bytes_read).."] bytes read, expected ["..tostring(#line).."]")
+            end
             total = total + 1
         end
         if total ~= #line then
-        	error("only ["..tostring(bytes_read).."] bytes read, expected ["..tostring(#line).."]")
-				end
+          error("only ["..tostring(bytes_read).."] bytes read, expected ["..tostring(#line).."]")
+        end
    end
 end
 
@@ -239,6 +239,7 @@ local function apply_client(N, client, parser, requests)
     for i=1,N do
         for x=1,#requests do
             client(parser, requests[x])
+            parser:reset()
         end
     end
 end
@@ -282,7 +283,7 @@ local function apply_client_speedtest(name, client)
     if disable_gc then collectgarbage"stop" end
     local diff1, diff2 = bench(name, N, apply_client, client, parser, data_list)
     end_mem = (collectgarbage"count" * 1024)
-		local total = N * #data_list
+    local total = N * #data_list
     printf("units/sec: %10.6f (%10.6f) units/sec", total/diff1, total/diff2)
     --print(name, 'end   memory size: ', end_mem)
     print(name, 'total memory used: ', (end_mem - start_mem))
@@ -321,21 +322,17 @@ local clients = {
     bad = bad_client,
 }
 
----[[
 print('memory test')
 for name,client in pairs(clients) do
     apply_client_memtest(name, client)
 end
---]]
 
 print('speed test')
 for name,client in pairs(clients) do
     apply_client_speedtest(name, client)
 end
 
----[[
 print('overhead test')
 per_parser_overhead(N)
---]]
 
 
