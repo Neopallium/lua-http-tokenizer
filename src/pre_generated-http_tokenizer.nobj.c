@@ -11,6 +11,7 @@
 #include "lualib.h"
 
 #define REG_PACKAGE_IS_CONSTRUCTOR 0
+#define REG_MODULES_AS_GLOBALS 0
 #define REG_OBJECTS_AS_GLOBALS 0
 #define OBJ_DATA_HIDDEN_METATABLE 1
 #define USE_FIELD_GET_SET_METHODS 0
@@ -39,6 +40,7 @@
 /* for MinGW32 compiler need to include <stdint.h> */
 #ifdef __GNUC__
 #include <stdint.h>
+#include <stdbool.h>
 #else
 
 /* define some standard types missing on Windows. */
@@ -55,7 +57,7 @@ typedef int bool;
 #define true 1
 #endif
 #ifndef false
-#define false 1
+#define false 0
 #endif
 
 #endif
@@ -96,19 +98,26 @@ typedef int bool;
 #define assert_obj_type(type, obj)
 #endif
 
-#ifndef obj_type_free
+void *nobj_realloc(void *ptr, size_t osize, size_t nsize);
+
+void *nobj_realloc(void *ptr, size_t osize, size_t nsize) {
+	(void)osize;
+	if(0 == nsize) {
+		free(ptr);
+		return NULL;
+	}
+	return realloc(ptr, nsize);
+}
+
 #define obj_type_free(type, obj) do { \
 	assert_obj_type(type, obj); \
-	free((obj)); \
+	nobj_realloc((obj), sizeof(type), 0); \
 } while(0)
-#endif
 
-#ifndef obj_type_new
 #define obj_type_new(type, obj) do { \
 	assert_obj_type(type, obj); \
-	(obj) = malloc(sizeof(type)); \
+	(obj) = nobj_realloc(NULL, 0, sizeof(type)); \
 } while(0)
-#endif
 
 typedef struct obj_type obj_type;
 
@@ -181,7 +190,7 @@ typedef struct reg_sub_module {
 	const obj_base  *bases;
 	const obj_field *fields;
 	const obj_const *constants;
-	bool            bidirectional_consts;
+	int             bidirectional_consts;
 } reg_sub_module;
 
 #define OBJ_UDATA_FLAG_OWN (1<<0)
@@ -199,9 +208,13 @@ static char obj_udata_weak_ref_key[] = "obj_udata_weak_ref_key";
 static char obj_udata_private_key[] = "obj_udata_private_key";
 
 #if LUAJIT_FFI
+typedef int (*ffi_export_func_t)(void);
 typedef struct ffi_export_symbol {
 	const char *name;
-	void       *sym;
+	union {
+	void               *data;
+	ffi_export_func_t  func;
+	} sym;
 } ffi_export_symbol;
 #endif
 
@@ -238,7 +251,8 @@ static int nobj_check_ffi_support(lua_State *L) {
 	if(!lua_isnil(L, -1)) {
 		rc = lua_toboolean(L, -1);
 		lua_pop(L, 1);
-		return rc; /* return results of previous check. */
+		/* use results of previous check. */
+		goto finished;
 	}
 	lua_pop(L, 1); /* pop nil. */
 
@@ -264,6 +278,7 @@ static int nobj_check_ffi_support(lua_State *L) {
 	lua_pushboolean(L, rc);
 	lua_rawset(L, LUA_REGISTRYINDEX);
 
+finished:
 	/* turn-on hint that there is FFI code enabled. */
 	if(rc) {
 		nobj_ffi_support_enabled_hint = 1;
@@ -272,19 +287,39 @@ static int nobj_check_ffi_support(lua_State *L) {
 	return rc;
 }
 
+typedef struct {
+	const char **ffi_init_code;
+	int offset;
+} nobj_reader_state;
+
+static const char *nobj_lua_Reader(lua_State *L, void *data, size_t *size) {
+	nobj_reader_state *state = (nobj_reader_state *)data;
+	const char *ptr;
+
+	ptr = state->ffi_init_code[state->offset];
+	if(ptr != NULL) {
+		*size = strlen(ptr);
+		state->offset++;
+	} else {
+		*size = 0;
+	}
+	return ptr;
+}
+
 static int nobj_try_loading_ffi(lua_State *L, const char *ffi_mod_name,
-		const char *ffi_init_code, const ffi_export_symbol *ffi_exports, int priv_table)
+		const char *ffi_init_code[], const ffi_export_symbol *ffi_exports, int priv_table)
 {
+	nobj_reader_state state = { ffi_init_code, 0 };
 	int err;
 
 	/* export symbols to priv_table. */
 	while(ffi_exports->name != NULL) {
 		lua_pushstring(L, ffi_exports->name);
-		lua_pushlightuserdata(L, ffi_exports->sym);
+		lua_pushlightuserdata(L, ffi_exports->sym.data);
 		lua_settable(L, priv_table);
 		ffi_exports++;
 	}
-	err = luaL_loadbuffer(L, ffi_init_code, strlen(ffi_init_code), ffi_mod_name);
+	err = lua_load(L, nobj_lua_Reader, &state, ffi_mod_name);
 	if(0 == err) {
 		lua_pushvalue(L, -2); /* dup C module's table. */
 		lua_pushvalue(L, priv_table); /* move priv_table to top of stack. */
@@ -306,6 +341,10 @@ static int nobj_try_loading_ffi(lua_State *L, const char *ffi_mod_name,
 
 #ifndef REG_PACKAGE_IS_CONSTRUCTOR
 #define REG_PACKAGE_IS_CONSTRUCTOR 1
+#endif
+
+#ifndef REG_MODULES_AS_GLOBALS
+#define REG_MODULES_AS_GLOBALS 0
 #endif
 
 #ifndef REG_OBJECTS_AS_GLOBALS
@@ -529,6 +568,7 @@ static FUNC_UNUSED void obj_udata_luapush_weak(lua_State *L, void *obj, obj_type
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
 	if(nobj_ffi_support_enabled_hint && lua_isfunction(L, -1)) {
+		lua_remove(L, -2);
 		/* call special FFI "void *" to FFI object convertion function. */
 		lua_pushlightuserdata(L, obj);
 		lua_pushinteger(L, flags);
@@ -653,6 +693,7 @@ static FUNC_UNUSED void * obj_simple_udata_luadelete(lua_State *L, int _index, o
 
 static FUNC_UNUSED void *obj_simple_udata_luapush(lua_State *L, void *obj, int size, obj_type *type)
 {
+	void *ud;
 #if LUAJIT_FFI
 	lua_pushlightuserdata(L, type);
 	lua_rawget(L, LUA_REGISTRYINDEX); /* type's metatable. */
@@ -664,7 +705,7 @@ static FUNC_UNUSED void *obj_simple_udata_luapush(lua_State *L, void *obj, int s
 	}
 #endif
 	/* create new userdata. */
-	void *ud = lua_newuserdata(L, size);
+	ud = lua_newuserdata(L, size);
 	memcpy(ud, obj, size);
 	/* get obj_type metatable. */
 #if LUAJIT_FFI
@@ -722,7 +763,7 @@ static int obj_constructor_call_wrapper(lua_State *L) {
 }
 
 static void obj_type_register_constants(lua_State *L, const obj_const *constants, int tab_idx,
-		bool bidirectional) {
+		int bidirectional) {
 	/* register constants. */
 	while(constants->name != NULL) {
 		lua_pushstring(L, constants->name);
@@ -888,6 +929,12 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 	lua_pop(L, 2);                      /* drop metatable & methods */
 }
 
+static FUNC_UNUSED int lua_checktype_ref(lua_State *L, int _index, int _type) {
+	luaL_checktype(L,_index,_type);
+	lua_pushvalue(L,_index);
+	return luaL_ref(L, LUA_REGISTRYINDEX);
+}
+
 
 
 #define obj_type_http_tokenizer_check(L, _index) \
@@ -902,7 +949,7 @@ static void obj_type_register(lua_State *L, const reg_sub_module *type_reg, int 
 
 
 
-static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
+static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n"
 "local function ffi_safe_load(name, global)\n"
 "	local stat, C = pcall(ffi.load, name, global)\n"
 "	if not stat then return nil, C end\n"
@@ -913,14 +960,31 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "	return assert(ffi_safe_load(name, global))\n"
 "end\n"
 "\n"
+"local function ffi_string(ptr)\n"
+"	if ptr ~= nil then\n"
+"		return ffi.string(ptr)\n"
+"	end\n"
+"	return nil\n"
+"end\n"
+"\n"
+"local function ffi_string_len(ptr, len)\n"
+"	if ptr ~= nil then\n"
+"		return ffi.string(ptr, len)\n"
+"	end\n"
+"	return nil\n"
+"end\n"
+"\n"
 "local error = error\n"
 "local type = type\n"
 "local tonumber = tonumber\n"
 "local tostring = tostring\n"
+"local sformat = require\"string\".format\n"
 "local rawset = rawset\n"
 "local setmetatable = setmetatable\n"
+"local package = (require\"package\") or {}\n"
 "local p_config = package.config\n"
 "local p_cpath = package.cpath\n"
+"\n"
 "\n"
 "local ffi_load_cmodule\n"
 "\n"
@@ -928,8 +992,8 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "if p_config == nil and p_cpath == nil then\n"
 "	ffi_load_cmodule = function(name, global)\n"
 "		for path,module in pairs(package.loaded) do\n"
-"			if type(module) == 'string' and path:match(\"zmq\") then\n"
-"				local C, err = ffi_safe_load(path .. '.luvit', global)\n"
+"			if module == name then\n"
+"				local C, err = ffi_safe_load(path, global)\n"
 "				-- return opened library\n"
 "				if C then return C end\n"
 "			end\n"
@@ -956,6 +1020,9 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "end\n"
 "\n"
 "local _M, _priv, reg_table = ...\n"
+"local REG_MODULES_AS_GLOBALS = false\n"
+"local REG_OBJECTS_AS_GLOBALS = false\n"
+"local C = ffi.C\n"
 "\n"
 "local OBJ_UDATA_FLAG_OWN		= 1\n"
 "\n"
@@ -999,6 +1066,10 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "\n"
 "]])\n"
 "\n"
+"local nobj_callback_states = {}\n"
+"local nobj_weak_objects = setmetatable({}, {__mode = \"v\"})\n"
+"local nobj_obj_flags = {}\n"
+"\n"
 "local function obj_ptr_to_id(ptr)\n"
 "	return tonumber(ffi.cast('uintptr_t', ptr))\n"
 "end\n"
@@ -1026,8 +1097,12 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "	end\n"
 "	_pub[obj_name] = obj_pub\n"
 "	_M[obj_name] = obj_pub\n"
+"	if REG_OBJECTS_AS_GLOBALS then\n"
+"		_G[obj_name] = obj_pub\n"
+"	end\n"
 "end\n"
-"local C = ffi_load_cmodule(\"http_tokenizer\", false)\n"
+"local Cmod = ffi_load_cmodule(\"http_tokenizer\", false)\n"
+"local C = Cmod\n"
 "\n"
 "ffi.cdef[[\n"
 "typedef struct http_tokenizer http_tokenizer;\n"
@@ -1118,11 +1193,20 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "\n"
 "]]\n"
 "\n"
+"REG_MODULES_AS_GLOBALS = false\n"
+"REG_OBJECTS_AS_GLOBALS = false\n"
 "local _pub = {}\n"
 "local _meth = {}\n"
+"local _push = {}\n"
+"local _obj_subs = {}\n"
+"local _type_names = {}\n"
+"local _ctypes = {}\n"
 "for obj_name,mt in pairs(_priv) do\n"
-"	if type(mt) == 'table' and mt.__index then\n"
-"		_meth[obj_name] = mt.__index\n"
+"	if type(mt) == 'table' then\n"
+"		_obj_subs[obj_name] = {}\n"
+"		if mt.__index then\n"
+"			_meth[obj_name] = mt.__index\n"
+"		end\n"
 "	end\n"
 "end\n"
 "for obj_name,pub in pairs(_M) do\n"
@@ -1136,49 +1220,58 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "\n"
 "do\n"
 "	local obj_mt = _priv.http_tokenizer\n"
-"	local objects = setmetatable({}, {__mode = \"v\"})\n"
-"	local obj_flags = {}\n"
+"	local obj_type = obj_mt['.type']\n"
+"	local obj_ctype = ffi.typeof(\"http_tokenizer *\")\n"
+"	_ctypes.http_tokenizer = obj_ctype\n"
+"	_type_names.http_tokenizer = tostring(obj_ctype)\n"
 "\n"
 "	function obj_type_http_tokenizer_check(ptr)\n"
-"		return ptr\n"
+"		-- if ptr is nil or is the correct type, then just return it.\n"
+"		if not ptr or ffi.istype(obj_ctype, ptr) then return ptr end\n"
+"		-- check if it is a compatible type.\n"
+"		local ctype = tostring(ffi.typeof(ptr))\n"
+"		local bcaster = _obj_subs.http_tokenizer[ctype]\n"
+"		if bcaster then\n"
+"			return bcaster(ptr)\n"
+"		end\n"
+"		return error(\"Expected 'http_tokenizer *'\", 2)\n"
 "	end\n"
 "\n"
 "	function obj_type_http_tokenizer_delete(ptr)\n"
 "		local id = obj_ptr_to_id(ptr)\n"
-"		local flags = obj_flags[id]\n"
+"		local flags = nobj_obj_flags[id]\n"
 "		if not flags then return nil, 0 end\n"
 "		ffi.gc(ptr, nil)\n"
-"		obj_flags[id] = nil\n"
+"		nobj_obj_flags[id] = nil\n"
 "		return ptr, flags\n"
 "	end\n"
 "\n"
 "	function obj_type_http_tokenizer_push(ptr, flags)\n"
 "		local id = obj_ptr_to_id(ptr)\n"
 "		-- check weak refs\n"
-"		local old_ptr = objects[id]\n"
+"		local old_ptr = nobj_weak_objects[id]\n"
 "		if old_ptr then return old_ptr end\n"
-"		if flags then\n"
-"			obj_flags[id] = flags\n"
+"\n"
+"		if flags ~= 0 then\n"
+"			nobj_obj_flags[id] = flags\n"
 "			ffi.gc(ptr, obj_mt.__gc)\n"
 "		end\n"
-"		objects[id] = ptr\n"
+"		nobj_weak_objects[id] = ptr\n"
 "		return ptr\n"
 "	end\n"
 "\n"
 "	function obj_mt:__tostring()\n"
-"		local id = obj_ptr_to_id(self)\n"
-"		return \"http_tokenizer: \" .. tostring(id)\n"
+"		return sformat(\"http_tokenizer: %p, flags=%d\", self, nobj_obj_flags[obj_ptr_to_id(self)] or 0)\n"
 "	end\n"
 "\n"
 "	-- type checking function for C API.\n"
-"	local obj_type = obj_mt['.type']\n"
 "	_priv[obj_type] = function(ptr)\n"
-"		if ffi.istype(\"http_tokenizer *\", ptr) then return ptr end\n"
+"		if ffi.istype(obj_ctype, ptr) then return ptr end\n"
 "		return nil\n"
 "	end\n"
 "	-- push function for C API.\n"
 "	reg_table[obj_type] = function(ptr, flags)\n"
-"		return obj_type_http_tokenizer_push(ffi.cast('http_tokenizer *',ptr), flags)\n"
+"		return obj_type_http_tokenizer_push(ffi.cast(obj_ctype,ptr), flags)\n"
 "	end\n"
 "\n"
 "end\n"
@@ -1192,6 +1285,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  C.http_tokenizer_reset(self)\n"
 "  return \n"
 "end\n"
+"\n"
 "-- method: execute\n"
 "function _meth.http_tokenizer.execute(self, data)\n"
 "  \n"
@@ -1200,6 +1294,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_execute = C.http_tokenizer_execute(self, data, data_len)\n"
 "  return rc_http_tokenizer_execute\n"
 "end\n"
+"\n"
 "-- method: parse\n"
 "function _meth.http_tokenizer.parse(self, cbs, data)\n"
 "  \n"
@@ -1218,6 +1313,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "\n"
 "  return \n"
 "end\n"
+"\n"
 "-- method: should_keep_alive\n"
 "function _meth.http_tokenizer.should_keep_alive(self)\n"
 "  \n"
@@ -1225,6 +1321,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_should_keep_alive = C.http_tokenizer_should_keep_alive(self)\n"
 "  return rc_http_tokenizer_should_keep_alive\n"
 "end\n"
+"\n"
 "-- method: is_upgrade\n"
 "function _meth.http_tokenizer.is_upgrade(self)\n"
 "  \n"
@@ -1232,6 +1329,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_is_upgrade = C.http_tokenizer_is_upgrade(self)\n"
 "  return rc_http_tokenizer_is_upgrade\n"
 "end\n"
+"\n"
 "-- method: method\n"
 "function _meth.http_tokenizer.method(self)\n"
 "  \n"
@@ -1239,13 +1337,15 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_method = C.http_tokenizer_method(self)\n"
 "  return rc_http_tokenizer_method\n"
 "end\n"
+"\n"
 "-- method: method_str\n"
 "function _meth.http_tokenizer.method_str(self)\n"
 "  \n"
-"  local rc_http_tokenizer_method_str = NULL\n"
+"  local rc_http_tokenizer_method_str\n"
 "  rc_http_tokenizer_method_str = C.http_tokenizer_method_str(self)\n"
-"  return ((nil ~= rc_http_tokenizer_method_str) and ffi.string(rc_http_tokenizer_method_str))\n"
+"  return ffi_string(rc_http_tokenizer_method_str)\n"
 "end\n"
+"\n"
 "-- method: version\n"
 "function _meth.http_tokenizer.version(self)\n"
 "  \n"
@@ -1253,6 +1353,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_version = C.http_tokenizer_version(self)\n"
 "  return rc_http_tokenizer_version\n"
 "end\n"
+"\n"
 "-- method: status_code\n"
 "function _meth.http_tokenizer.status_code(self)\n"
 "  \n"
@@ -1260,6 +1361,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_status_code = C.http_tokenizer_status_code(self)\n"
 "  return rc_http_tokenizer_status_code\n"
 "end\n"
+"\n"
 "-- method: error\n"
 "function _meth.http_tokenizer.error(self)\n"
 "  \n"
@@ -1267,20 +1369,24 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_error = C.http_tokenizer_error(self)\n"
 "  return rc_http_tokenizer_error\n"
 "end\n"
+"\n"
 "-- method: error_name\n"
 "function _meth.http_tokenizer.error_name(self)\n"
 "  \n"
-"  local rc_http_tokenizer_error_name = NULL\n"
+"  local rc_http_tokenizer_error_name\n"
 "  rc_http_tokenizer_error_name = C.http_tokenizer_error_name(self)\n"
-"  return ((nil ~= rc_http_tokenizer_error_name) and ffi.string(rc_http_tokenizer_error_name))\n"
+"  return ffi_string(rc_http_tokenizer_error_name)\n"
 "end\n"
+"\n"
 "-- method: error_description\n"
 "function _meth.http_tokenizer.error_description(self)\n"
 "  \n"
-"  local rc_http_tokenizer_error_description = NULL\n"
+"  local rc_http_tokenizer_error_description\n"
 "  rc_http_tokenizer_error_description = C.http_tokenizer_error_description(self)\n"
-"  return ((nil ~= rc_http_tokenizer_error_description) and ffi.string(rc_http_tokenizer_error_description))\n"
+"  return ffi_string(rc_http_tokenizer_error_description)\n"
 "end\n"
+"\n"
+"_push.http_tokenizer = obj_type_http_tokenizer_push\n"
 "ffi.metatype(\"http_tokenizer\", _priv.http_tokenizer)\n"
 "-- End \"http_tokenizer\" FFI interface\n"
 "\n"
@@ -1291,6 +1397,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_new_request = C.http_tokenizer_new_request()\n"
 "  return obj_type_http_tokenizer_push(rc_http_tokenizer_new_request, rc_http_tokenizer_new_request_flags)\n"
 "end\n"
+"\n"
 "-- method: response\n"
 "function _M.response()\n"
 "  local rc_http_tokenizer_new_response_flags = OBJ_UDATA_FLAG_OWN\n"
@@ -1298,7 +1405,7 @@ static const char http_tokenizer_ffi_lua_code[] = "local ffi=require\"ffi\"\n"
 "  rc_http_tokenizer_new_response = C.http_tokenizer_new_response()\n"
 "  return obj_type_http_tokenizer_push(rc_http_tokenizer_new_response, rc_http_tokenizer_new_response_flags)\n"
 "end\n"
-"";
+"\n", NULL };
 
 
 /* method: _priv */
@@ -1526,8 +1633,8 @@ static const obj_const http_tokenizer_constants[] = {
 
 
 static const reg_sub_module reg_sub_modules[] = {
-  { &(obj_type_http_tokenizer), REG_OBJECT, obj_http_tokenizer_pub_funcs, obj_http_tokenizer_methods, obj_http_tokenizer_metas, obj_http_tokenizer_bases, obj_http_tokenizer_fields, obj_http_tokenizer_constants, false},
-  {NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, false}
+  { &(obj_type_http_tokenizer), REG_OBJECT, obj_http_tokenizer_pub_funcs, obj_http_tokenizer_methods, obj_http_tokenizer_metas, obj_http_tokenizer_bases, obj_http_tokenizer_fields, obj_http_tokenizer_constants, 0},
+  {NULL, 0, NULL, NULL, NULL, NULL, NULL, NULL, 0}
 };
 
 
@@ -1536,7 +1643,7 @@ static const reg_sub_module reg_sub_modules[] = {
 
 #if LUAJIT_FFI
 static const ffi_export_symbol http_tokenizer_ffi_export[] = {
-  {NULL, NULL}
+  {NULL, { NULL } }
 };
 #endif
 
@@ -1584,11 +1691,15 @@ LUA_NOBJ_API int luaopen_http_tokenizer(lua_State *L) {
 	create_object_instance_cache(L);
 
 	/* module table. */
+#if REG_MODULES_AS_GLOBALS
+	luaL_register(L, "http_tokenizer", http_tokenizer_function);
+#else
 	lua_newtable(L);
 	luaL_register(L, NULL, http_tokenizer_function);
+#endif
 
 	/* register module constants. */
-	obj_type_register_constants(L, http_tokenizer_constants, -1, false);
+	obj_type_register_constants(L, http_tokenizer_constants, -1, 0);
 
 	for(; submodules->func != NULL ; submodules++) {
 		lua_pushcfunction(L, submodules->func);
