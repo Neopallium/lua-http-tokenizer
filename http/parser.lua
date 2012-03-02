@@ -86,6 +86,10 @@ function parser_mt:execute(data)
 	return parsed
 end
 
+function parser_mt:reset()
+	return self.tokenizer:reset()
+end
+
 local function create_parser(tokenizer, cbs)
 	local self = {
 		tokenizer = tokenizer,
