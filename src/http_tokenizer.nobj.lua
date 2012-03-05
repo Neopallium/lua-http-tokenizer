@@ -79,9 +79,7 @@ object "http_tokenizer" {
 	-- register epoll & http_tokenizer datastures with FFI.
 	ffi_cdef(http_tokenizer_type),
   destructor {
-		c_source[[
-	http_tokenizer_free(${this});
-]],
+		c_method_call "void" "http_tokenizer_free" {},
   },
 
   method "reset" {

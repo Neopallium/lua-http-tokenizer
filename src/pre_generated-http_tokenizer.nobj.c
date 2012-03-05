@@ -296,6 +296,7 @@ static const char *nobj_lua_Reader(lua_State *L, void *data, size_t *size) {
 	nobj_reader_state *state = (nobj_reader_state *)data;
 	const char *ptr;
 
+	(void)L;
 	ptr = state->ffi_init_code[state->offset];
 	if(ptr != NULL) {
 		*size = strlen(ptr);
@@ -468,7 +469,7 @@ static FUNC_UNUSED void *obj_udata_luacheck(lua_State *L, int _index, obj_type *
 
 static FUNC_UNUSED void *obj_udata_luaoptional(lua_State *L, int _index, obj_type *type) {
 	void *obj = NULL;
-	if(lua_isnil(L, _index)) {
+	if(lua_gettop(L) < _index) {
 		return obj;
 	}
 	obj_udata_luacheck_internal(L, _index, &(obj), type, 1);
@@ -676,7 +677,7 @@ static FUNC_UNUSED void * obj_simple_udata_luacheck(lua_State *L, int _index, ob
 }
 
 static FUNC_UNUSED void * obj_simple_udata_luaoptional(lua_State *L, int _index, obj_type *type) {
-	if(lua_isnil(L, _index)) {
+	if(lua_gettop(L) < _index) {
 		return NULL;
 	}
 	return obj_simple_udata_luacheck(L, _index, type);
@@ -1164,6 +1165,8 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "uint32_t http_tokenizer_count_tokens(http_tokenizer* tokenizer);\n"
 "\n"
 "\n"
+"void http_tokenizer_free(http_tokenizer *);\n"
+"\n"
 "void http_tokenizer_reset(http_tokenizer *);\n"
 "\n"
 "uint32_t http_tokenizer_execute(http_tokenizer *, const char *, uint32_t);\n"
@@ -1279,6 +1282,14 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "\n"
 "\n"
 "-- Start \"http_tokenizer\" FFI interface\n"
+"-- method: __gc\n"
+"function _priv.http_tokenizer.__gc(self)\n"
+"  local self,this_flags = obj_type_http_tokenizer_delete(self)\n"
+"  if not self then return end\n"
+"  C.http_tokenizer_free(self)\n"
+"  return \n"
+"end\n"
+"\n"
 "-- method: reset\n"
 "function _meth.http_tokenizer.reset(self)\n"
 "  \n"
@@ -1413,8 +1424,7 @@ static int http_tokenizer__delete__meth(lua_State *L) {
   int this_flags = 0;
   http_tokenizer * this = obj_type_http_tokenizer_delete(L,1,&(this_flags));
   if(!(this_flags & OBJ_UDATA_FLAG_OWN)) { return 0; }
-	http_tokenizer_free(this);
-
+  http_tokenizer_free(this);
   return 0;
 }
 
