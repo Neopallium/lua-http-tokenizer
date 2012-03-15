@@ -13,16 +13,15 @@
 struct http_tokenizer {
 	http_parser parser;   /**< embedded http_parser. */
 	http_token  *tokens;  /**< array of parsed tokens. */
-	uint32_t    count;    /**< number of parsed tokens. */
-	uint32_t    len;      /**< length of tokens array. */
+	uint16_t    count;    /**< number of parsed tokens. */
+	uint16_t    len;      /**< length of tokens array. */
 };
 
 #define INIT_TOKENS 32
 #define GROW_TOKENS 128
 
 static int http_tokenizer_grow(http_tokenizer* tokenizer) {
-	uint32_t    old_len = tokenizer->len;
-	uint32_t    len = old_len + GROW_TOKENS;
+	uint32_t    len = tokenizer->len + GROW_TOKENS;
 	http_token  *tokens;
 
 	if(len > HTTP_TOKENIZER_MAX_TOKENS) return -1;
@@ -31,6 +30,10 @@ static int http_tokenizer_grow(http_tokenizer* tokenizer) {
 	if(tokens == NULL) return -1;
 	tokenizer->tokens = tokens;
 	tokenizer->len = len;
+	if((len + GROW_TOKENS) > HTTP_TOKENIZER_MAX_TOKENS) {
+		/* can't hold any more tokens, pause parsing. */
+		http_parser_pause(&(tokenizer->parser), 1);
+	}
 	return 0;
 }
 
@@ -101,7 +104,10 @@ static int http_tokenizer_body_cb(http_parser* parser, const char* data, size_t 
 }
 
 static int http_tokenizer_message_complete_cb(http_parser* parser) {
-	return http_push_token(parser, HTTP_TOKEN_MESSAGE_COMPLETE);
+	http_tokenizer* tokenizer = (http_tokenizer*)parser;
+	if(http_push_token(parser, HTTP_TOKEN_MESSAGE_COMPLETE) < 0) return -1;
+	http_parser_pause(parser, 1);
+	return 0;
 }
 
 static void http_tokenizer_reset_internal(http_tokenizer* tokenizer) {
@@ -169,6 +175,10 @@ uint32_t http_tokenizer_execute(http_tokenizer* tokenizer, const char *data, uin
 	/* save start of data pointer for offset calculation. */
 	parser->data = (void *)data;
 
+	if(parser->http_errno == HPE_PAUSED) {
+		/* resume parser. */
+		http_parser_pause(parser, 0);
+	}
 	/* parse data into tokens. */
 	return http_parser_execute(parser, &settings, data, len);
 }
@@ -203,6 +213,10 @@ int http_tokenizer_version(http_tokenizer* tokenizer) {
 
 int http_tokenizer_status_code(http_tokenizer* tokenizer) {
 	return tokenizer->parser.status_code;
+}
+
+int http_tokenizer_is_error(http_tokenizer* tokenizer) {
+	return (tokenizer->parser.http_errno != HPE_OK && tokenizer->parser.http_errno != HPE_PAUSED);
 }
 
 int http_tokenizer_error(http_tokenizer* tokenizer) {

@@ -77,13 +77,34 @@ function parser_mt:error()
 	return self.tokenizer:error(), self.tokenizer:error_name(), self.tokenizer:error_description()
 end
 
-function parser_mt:execute(data)
+local function parser_execute(self, data, total_parsed)
 	local tokenizer = self.tokenizer
-	local parsed = tokenizer:execute(data)
+	local len = #data
+	local nparsed = tokenizer:execute(data)
 
+	-- track tootal number of bytes parsed.
+	total_parsed = total_parsed + nparsed
+
+	if nparsed == len then
+		-- all data parsed no errors.
+		tokenizer:parse(self.handlers, data)
+		return total_parsed
+	end
+
+	-- check for http-parser error.
+	if tokenizer:is_error() then
+		-- skip parsing of tokens on error.
+		return total_parsed
+	end
+
+	-- tokenizer paused parsing parse tokens before continuing.
 	tokenizer:parse(self.handlers, data)
 
-	return parsed
+	return parser_execute(self, data:sub(nparsed+1), total_parsed)
+end
+
+function parser_mt:execute(data)
+	return parser_execute(self, data, 0)
 end
 
 function parser_mt:reset()

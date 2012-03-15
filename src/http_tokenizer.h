@@ -28,7 +28,7 @@ typedef uint32_t httplen_t;
 
 typedef struct http_token http_token;
 struct http_token {
-	uint16_t    id;   /**< token id. */
+	uint32_t    id;   /**< token id. */
 	httpoff_t   off;  /**< token offset. */
 	httplen_t   len;  /**< token length. */
 };
@@ -84,6 +84,8 @@ HT_LIB_API const char *http_tokenizer_method_str(http_tokenizer* tokenizer);
 HT_LIB_API int http_tokenizer_version(http_tokenizer* tokenizer);
 
 HT_LIB_API int http_tokenizer_status_code(http_tokenizer* tokenizer);
+
+HT_LIB_API int http_tokenizer_is_error(http_tokenizer* tokenizer);
 
 HT_LIB_API int http_tokenizer_error(http_tokenizer* tokenizer);
 

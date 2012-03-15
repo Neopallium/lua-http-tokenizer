@@ -55,7 +55,7 @@ typedef uint32_t httplen_t;
 
 typedef struct http_token http_token;
 struct http_token {
-	uint16_t    id;
+	uint32_t    id;
 	httpoff_t   off;
 	httplen_t   len;
 }
@@ -64,8 +64,8 @@ typedef struct http_tokenizer http_tokenizer;
 struct http_tokenizer {
 	http_parser parser;   /**< embedded http_parser. */
 	http_token  *tokens;  /**< array of parsed tokens. */
-	uint32_t    count;    /**< number of parsed tokens. */
-	uint32_t    len;      /**< length of tokens array. */
+	uint16_t    count;    /**< number of parsed tokens. */
+	uint16_t    len;      /**< length of tokens array. */
 };
 
 const http_token *http_tokenizer_get_tokens(http_tokenizer* tokenizer);
@@ -146,6 +146,10 @@ object "http_tokenizer" {
 
   method "status_code" {
 		c_method_call "int" "http_tokenizer_status_code" {},
+  },
+
+  method "is_error" {
+		c_method_call "bool" "http_tokenizer_is_error" {},
   },
 
   method "error" {
