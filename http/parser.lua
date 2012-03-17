@@ -73,6 +73,10 @@ function parser_mt:status_code()
 	return self.tokenizer:status_code()
 end
 
+function parser_mt:is_error()
+	return self.tokenizer:is_error()
+end
+
 function parser_mt:error()
 	return self.tokenizer:error(), self.tokenizer:error_name(), self.tokenizer:error_description()
 end
