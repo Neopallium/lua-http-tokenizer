@@ -1115,20 +1115,20 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "typedef struct http_parser http_parser;\n"
 "struct http_parser {\n"
 "  /** PRIVATE **/\n"
-"  unsigned char type : 2;\n"
-"  unsigned char flags : 6; /* F_* values from 'flags' enum; semi-public */\n"
-"  unsigned char state;\n"
-"  unsigned char header_state;\n"
-"  unsigned char index;\n"
+"  unsigned char type : 2;     /* enum http_parser_type */\n"
+"  unsigned char flags : 6;    /* F_* values from 'flags' enum; semi-public */\n"
+"  unsigned char state;        /* enum state from http_parser.c */\n"
+"  unsigned char header_state; /* enum header_state from http_parser.c */\n"
+"  unsigned char index;        /* index into current matcher */\n"
 "\n"
-"  uint32_t nread;\n"
-"  int64_t content_length;\n"
+"  uint32_t nread;          /* # bytes read in various scenarios */\n"
+"  uint64_t content_length; /* # bytes in body (0 if no Content-Length header) */\n"
 "\n"
 "  /** READ-ONLY **/\n"
 "  unsigned short http_major;\n"
 "  unsigned short http_minor;\n"
 "  unsigned short status_code; /* responses only */\n"
-"  unsigned char method;    /* requests only */\n"
+"  unsigned char method;       /* requests only */\n"
 "  unsigned char http_errno : 7;\n"
 "\n"
 "  /* 1 = Upgrade header was present and the parser has exited because of that.\n"
@@ -1147,7 +1147,7 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "\n"
 "typedef struct http_token http_token;\n"
 "struct http_token {\n"
-"	uint16_t    id;\n"
+"	uint32_t    id;\n"
 "	httpoff_t   off;\n"
 "	httplen_t   len;\n"
 "}\n"
@@ -1156,8 +1156,8 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "struct http_tokenizer {\n"
 "	http_parser parser;   /**< embedded http_parser. */\n"
 "	http_token  *tokens;  /**< array of parsed tokens. */\n"
-"	uint32_t    count;    /**< number of parsed tokens. */\n"
-"	uint32_t    len;      /**< length of tokens array. */\n"
+"	uint16_t    count;    /**< number of parsed tokens. */\n"
+"	uint16_t    len;      /**< length of tokens array. */\n"
 "};\n"
 "\n"
 "const http_token *http_tokenizer_get_tokens(http_tokenizer* tokenizer);\n"
@@ -1182,6 +1182,8 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "int http_tokenizer_version(http_tokenizer *);\n"
 "\n"
 "int http_tokenizer_status_code(http_tokenizer *);\n"
+"\n"
+"bool http_tokenizer_is_error(http_tokenizer *);\n"
 "\n"
 "int http_tokenizer_error(http_tokenizer *);\n"
 "\n"
@@ -1373,6 +1375,14 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "  return rc_http_tokenizer_status_code\n"
 "end\n"
 "\n"
+"-- method: is_error\n"
+"function _meth.http_tokenizer.is_error(self)\n"
+"  \n"
+"  local rc_http_tokenizer_is_error = 0\n"
+"  rc_http_tokenizer_is_error = C.http_tokenizer_is_error(self)\n"
+"  return rc_http_tokenizer_is_error\n"
+"end\n"
+"\n"
 "-- method: error\n"
 "function _meth.http_tokenizer.error(self)\n"
 "  \n"
@@ -1523,6 +1533,15 @@ static int http_tokenizer__status_code__meth(lua_State *L) {
   return 1;
 }
 
+/* method: is_error */
+static int http_tokenizer__is_error__meth(lua_State *L) {
+  http_tokenizer * this = obj_type_http_tokenizer_check(L,1);
+  bool rc_http_tokenizer_is_error = 0;
+  rc_http_tokenizer_is_error = http_tokenizer_is_error(this);
+  lua_pushboolean(L, rc_http_tokenizer_is_error);
+  return 1;
+}
+
 /* method: error */
 static int http_tokenizer__error__meth(lua_State *L) {
   http_tokenizer * this = obj_type_http_tokenizer_check(L,1);
@@ -1584,6 +1603,7 @@ static const luaL_reg obj_http_tokenizer_methods[] = {
   {"method_str", http_tokenizer__method_str__meth},
   {"version", http_tokenizer__version__meth},
   {"status_code", http_tokenizer__status_code__meth},
+  {"is_error", http_tokenizer__is_error__meth},
   {"error", http_tokenizer__error__meth},
   {"error_name", http_tokenizer__error_name__meth},
   {"error_description", http_tokenizer__error_description__meth},
