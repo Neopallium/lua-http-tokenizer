@@ -104,7 +104,6 @@ static int http_tokenizer_body_cb(http_parser* parser, const char* data, size_t 
 }
 
 static int http_tokenizer_message_complete_cb(http_parser* parser) {
-	http_tokenizer* tokenizer = (http_tokenizer*)parser;
 	if(http_push_token(parser, HTTP_TOKEN_MESSAGE_COMPLETE) < 0) return -1;
 	http_parser_pause(parser, 1);
 	return 0;
