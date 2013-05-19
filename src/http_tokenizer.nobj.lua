@@ -58,7 +58,7 @@ struct http_token {
 	uint32_t    id;
 	httpoff_t   off;
 	httplen_t   len;
-}
+};
 
 typedef struct http_tokenizer http_tokenizer;
 struct http_tokenizer {
