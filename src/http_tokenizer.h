@@ -24,7 +24,7 @@
 typedef uint32_t httpoff_t;
 typedef uint32_t httplen_t;
 
-#define HTTP_TOKENIZER_MAX_CHUNK_LENGTH sizeof(httplen_t)
+#define HTTP_TOKENIZER_MAX_CHUNK_LENGTH (2 ^ (sizeof(httplen_t) * 8))
 
 typedef struct http_token http_token;
 struct http_token {
