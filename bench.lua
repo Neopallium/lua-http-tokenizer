@@ -7,8 +7,6 @@ local disable_gc = true
 local type = type
 local tconcat = table.concat
 
-local N=tonumber(arg[1]) or 10000
-
 if arg[1] == '-gc' then
     disable_gc = false
     table.remove(arg,1)
@@ -16,6 +14,8 @@ else
     print"GC is disabled so we can track memory usage better"
     print""
 end
+
+local N=tonumber(arg[1]) or 10000
 
 local function printf(fmt, ...)
     local res
@@ -91,7 +91,9 @@ requests.no_buff_body = {
     "Host: foo:80\r\n",
     "Content-Length: 12\r\n",
     "\r\n",
-    "chunk1", "chunk2",
+-- CONCAT not compiled on LuaJIT 2.0
+    --"chunk1", "chunk2",
+    "chunk1chunk2",
 }
 
 expects.no_buff_body = {
@@ -180,6 +182,46 @@ local function init_parser(reqs)
     return parser
 end
 
+local function init_fast_parser(reqs)
+    local cur          = nil
+    local parser
+
+    local cb           = {}
+    function cb.on_message_begin()
+        assert(cur == nil)
+        cur = { headers = {} }
+    end
+
+    function cb.on_url(value)
+        cur.url = value
+    end
+
+    function cb.on_body(value)
+        if not cur.body then
+            cur.body = value
+        elseif nil ~= value then
+            cur.body = cur.body .. value
+        end
+    end
+
+    function cb.on_header(field, value)
+        cur.headers[field] = value
+    end
+
+    function cb.on_headers_complete()
+        cur.method = parser:method()
+    end
+
+    function cb.on_message_complete()
+        assert(nil ~= cur)
+        if reqs then reqs[#reqs+1] = cur end
+        cur = nil
+    end
+
+    parser = lhp.request(cb)
+    return parser
+end
+
 local function null_cb()
 end
 local null_cbs = {
@@ -194,14 +236,16 @@ local function init_null_parser()
     return lhp.request(null_cbs)
 end
 
-local function assert_deeply(got, expect, context)
-    assert(type(expect) == "table", "Expected [" .. context .. "] to be a table")
+local function assert_deeply(got, expect, ...)
+    if type(expect) ~= "table" then
+        error("Expected [" .. context .. "] to be a table")
+    end
     for k, v in pairs(expect) do
-        local ctx = context .. "." .. k
         if type(expect[k]) == "table" then
-            assert_deeply(got[k], expect[k], ctx)
-        else
-            assert(got[k] == expect[k], "Expected [" .. ctx .. "] to be '" .. tostring(expect[k]) .. "', but got '" .. tostring(got[k]) .. "'")
+            assert_deeply(got[k], expect[k], k, ...)
+        elseif got[k] ~= expect[k] then
+            local ctx = table.concat({ ... }, '.')
+            error("Expected [" .. ctx .. "] to be '" .. tostring(expect[k]) .. "', but got '" .. tostring(got[k]) .. "'")
         end
     end
 end
@@ -242,19 +286,20 @@ local function apply_client(N, client, parser, requests)
     end
 end
 
-local function apply_client_memtest(name, client, N)
+local function apply_client_memtest(client)
     local start_mem, end_mem
+    local N = client.mem_N
     
     local reqs = {}
     local parser = init_parser(reqs)
     full_gc()
     start_mem = (collectgarbage"count" * 1024)
-    --print(name, 'start memory size: ', start_mem)
+    --print(client.name, 'start memory size: ', start_mem)
     if disable_gc then collectgarbage"stop" end
-    apply_client(N, client, parser, data_list)
+    apply_client(N, client.cb, parser, data_list)
     end_mem = (collectgarbage"count" * 1024)
-    --print(name, 'end   memory size: ', end_mem)
-    print(name, 'N=', N, 'total memory used: ', (end_mem - start_mem))
+    --print(client.name, 'end   memory size: ', end_mem)
+    print(client.name, 'N=', N, 'total memory used: ', (end_mem - start_mem))
     print()
    
     -- validate parsed request data.
@@ -272,20 +317,21 @@ local function apply_client_memtest(name, client, N)
     full_gc()
 end
 
-local function apply_client_speedtest(name, client, N)
+local function apply_client_speedtest(client)
     local start_mem, end_mem
+    local N = client.speed_N
  
-    local parser = init_parser()
+    local parser = init_fast_parser()
     full_gc()
     start_mem = (collectgarbage"count" * 1024)
-    --print(name, 'start memory size: ', start_mem)
+    --print(client.name, 'start memory size: ', start_mem)
     if disable_gc then collectgarbage"stop" end
-    local diff1, diff2 = bench(name, N, apply_client, client, parser, data_list)
+    local diff1, diff2 = bench(client.name, N, apply_client, client.cb, parser, data_list)
     end_mem = (collectgarbage"count" * 1024)
     local total = N * #data_list
     printf("units/sec: %10.6f (%10.6f) units/sec", total/diff1, total/diff2)
-    --print(name, 'end   memory size: ', end_mem)
-    print(name, 'N=', N, 'total memory used: ', (end_mem - start_mem))
+    --print(client.name, 'end   memory size: ', end_mem)
+    print(client.name, 'N=', N, 'total memory used: ', (end_mem - start_mem))
     print()
    
     parser = nil
@@ -317,19 +363,21 @@ local function per_parser_overhead(N)
 end
 
 local clients = {
-    good = { cb = good_client, mem_N=1, speed_N=N*10},
-    bad = { cb = bad_client, mem_N=1, speed_N=N},
+    { name = 'good', cb = good_client, mem_N=1, speed_N=N*10},
+    { name = 'bad', cb = bad_client, mem_N=1, speed_N=N},
 }
 
-print('memory test')
-for name,client in pairs(clients) do
-    apply_client_memtest(name, client.cb, client.mem_N)
+local function run_test(apply)
+    for idx,client in ipairs(clients) do
+        apply(client)
+    end
 end
 
+print('memory test')
+run_test(apply_client_memtest)
+
 print('speed test')
-for name,client in pairs(clients) do
-    apply_client_speedtest(name, client.cb, client.speed_N)
-end
+run_test(apply_client_speedtest)
 
 print('overhead test')
 per_parser_overhead(N)
