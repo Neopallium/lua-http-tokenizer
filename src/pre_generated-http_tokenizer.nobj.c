@@ -1898,7 +1898,95 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "			break\n"
 "		end\n"
 "		-- update buffer pointer & length to remove parsed data.\n"
-"		data = data:sub(nparsed+1)\n"
+"		data = data + nparsed;\n"
+"		data_len = data_len + nparsed\n"
+"		-- loop when there is more data to parse.\n"
+"	until false\n"
+"\n"
+"  return parsed_len\n"
+"end\n"
+"\n"
+"-- method: execute_offsets\n"
+"function _meth.http_tokenizer.execute_offsets(self, cbs, data)\n"
+"  \n"
+"  local data_len = #data\n"
+"  local parsed_len = 0\n"
+"  local nparsed = 0\n"
+"  local tokens\n"
+"  local count = 0\n"
+"	assert(type(cbs) == 'function', \"Expected function for 'cbs' parameter.\")\n"
+"	repeat -- loop to resume tokenization\n"
+"\n"
+"  nparsed = C.http_tokenizer_execute(self, data, data_len)\n"
+"  tokens = C.http_tokenizer_get_tokens(self)\n"
+"  count = C.http_tokenizer_count_tokens(self)\n"
+"		-- track number of bytes parsed.\n"
+"		parsed_len = parsed_len + nparsed\n"
+"		-- call function with each event <id, data> pairs.\n"
+"		for n=0,(count-1) do\n"
+"			local len = tokens[n].len\n"
+"			if len > 0 then\n"
+"				cbs(tokens[n].id, tokens[n].off, len)\n"
+"			else\n"
+"				cbs(tokens[n].id)\n"
+"			end\n"
+"		end\n"
+"		-- check if buffer is now empty.\n"
+"		if nparsed == data_len then\n"
+"			break\n"
+"		end\n"
+"		-- check for errors.\n"
+"		if C.http_tokenizer_is_error(self) then\n"
+"			break\n"
+"		end\n", /* ----- CUT ----- */
+"		-- update buffer pointer & length to remove parsed data.\n"
+"		data = data + nparsed\n"
+"		data_len = data_len + nparsed\n"
+"		-- loop when there is more data to parse.\n"
+"	until false\n"
+"\n"
+"  return parsed_len\n"
+"end\n"
+"\n"
+"-- method: execute_offsets_buffer\n"
+"function _meth.http_tokenizer.execute_offsets_buffer(self, cbs, buf)\n"
+"  \n"
+"  buf_if = buf.NOBJ_get_BufferIF or obj_type_Buffer_check(buf)\n"
+"  local parsed_len = 0\n"
+"  local nparsed = 0\n"
+"  local data\n"
+"  local data_len = 0\n"
+"  local tokens\n"
+"  local count = 0\n"
+"	assert(type(cbs) == 'function', \"Expected function for 'cbs' parameter.\")\n"
+"	data_len = buf_if.get_size(buf)\n"
+"	data = buf_if.const_data(buf)\n"
+"	repeat -- loop to resume tokenization\n"
+"\n"
+"  nparsed = C.http_tokenizer_execute(self, data, data_len)\n"
+"  tokens = C.http_tokenizer_get_tokens(self)\n"
+"  count = C.http_tokenizer_count_tokens(self)\n"
+"		-- track number of bytes parsed.\n"
+"		parsed_len = parsed_len + nparsed\n"
+"		-- call function with each event <id, data> pairs.\n"
+"		for n=0,(count-1) do\n"
+"			local len = tokens[n].len\n"
+"			if len > 0 then\n"
+"				cbs(tokens[n].id, tokens[n].off, len)\n"
+"			else\n"
+"				cbs(tokens[n].id)\n"
+"			end\n"
+"		end\n"
+"		-- check if buffer is now empty.\n"
+"		if nparsed == data_len then\n"
+"			break\n"
+"		end\n"
+"		-- check for errors.\n"
+"		if C.http_tokenizer_is_error(self) then\n"
+"			break\n"
+"		end\n"
+"		-- update buffer pointer & length to remove parsed data.\n"
+"		data = data + nparsed\n"
 "		data_len = data_len + nparsed\n"
 "		-- loop when there is more data to parse.\n"
 "	until false\n"
@@ -1934,7 +2022,7 @@ static const char *http_tokenizer_ffi_lua_code[] = { "local ffi=require\"ffi\"\n
 "function _meth.http_tokenizer.method_str(self)\n"
 "  \n"
 "  local rc_http_tokenizer_method_str\n"
-"  rc_http_tokenizer_method_str = C.http_tokenizer_method_str(self)\n", /* ----- CUT ----- */
+"  rc_http_tokenizer_method_str = C.http_tokenizer_method_str(self)\n"
 "  return rc_http_tokenizer_method_str ~= nil and ffi_string(rc_http_tokenizer_method_str) or nil\n"
 "end\n"
 "\n"
@@ -2129,6 +2217,111 @@ static int http_tokenizer__execute_buffer__meth(lua_State *L) {
   return 1;
 }
 
+/* method: execute_offsets */
+static int http_tokenizer__execute_offsets__meth(lua_State *L) {
+  http_tokenizer * this;
+  size_t data_len;
+  const char * data;
+  uint32_t parsed_len = 0;
+  uint32_t nparsed = 0;
+  const http_token * tokens = NULL;
+  uint32_t count = 0;
+	uint32_t n;
+
+  this = obj_type_http_tokenizer_check(L,1);
+  data = luaL_checklstring(L,3,&(data_len));
+	luaL_checktype(L, 2, LUA_TFUNCTION);
+	do { /* loop to resume tokenization. */
+
+  nparsed = http_tokenizer_execute(this, data, data_len);
+  tokens = http_tokenizer_get_tokens(this);
+  count = http_tokenizer_count_tokens(this);
+		/* track number of bytes parsed. */
+		parsed_len += nparsed;
+		/* process tokens. */
+		for(n = 0; n < count; n++, tokens++) {
+			lua_pushvalue(L, 2);
+			lua_pushinteger(L, tokens->id);
+			if(tokens->len > 0) {
+				lua_pushinteger(L, tokens->off);
+				lua_pushinteger(L, tokens->len);
+				lua_call(L, 3, 0);
+			} else {
+				lua_call(L, 1, 0);
+			}
+		}
+		/* check if buffer is now empty. */
+		if(nparsed == data_len) {
+			break;
+		}
+		/* check for errors. */
+		if(http_tokenizer_is_error(this)) {
+			break;
+		}
+		/* update buffer pointer & length to remove parsed data. */
+		data += nparsed;
+		data_len -= nparsed;
+		/* loop when there is more data to parse. */
+	} while(1);
+
+  lua_pushinteger(L, parsed_len);
+  return 1;
+}
+
+/* method: execute_offsets_buffer */
+static int http_tokenizer__execute_offsets_buffer__meth(lua_State *L) {
+  http_tokenizer * this;
+  BufferIF_VAR(buf);
+  uint32_t parsed_len = 0;
+  uint32_t nparsed = 0;
+  const char * data = NULL;
+  uint32_t data_len = 0;
+  const http_token * tokens = NULL;
+  uint32_t count = 0;
+	uint32_t n;
+
+  this = obj_type_http_tokenizer_check(L,1);
+  BufferIF_LUA_CHECK(L,3, buf);
+	luaL_checktype(L, 2, LUA_TFUNCTION);
+	data_len = buf_if->get_size(buf);
+	data = (const char *)buf_if->const_data(buf);
+	do { /* loop to resume tokenization. */
+
+  nparsed = http_tokenizer_execute(this, data, data_len);
+  tokens = http_tokenizer_get_tokens(this);
+  count = http_tokenizer_count_tokens(this);
+		/* track number of bytes parsed. */
+		parsed_len += nparsed;
+		/* process tokens. */
+		for(n = 0; n < count; n++, tokens++) {
+			lua_pushvalue(L, 2);
+			lua_pushinteger(L, tokens->id);
+			if(tokens->len > 0) {
+				lua_pushinteger(L, tokens->off);
+				lua_pushinteger(L, tokens->len);
+				lua_call(L, 3, 0);
+			} else {
+				lua_call(L, 1, 0);
+			}
+		}
+		/* check if buffer is now empty. */
+		if(nparsed == data_len) {
+			break;
+		}
+		/* check for errors. */
+		if(http_tokenizer_is_error(this)) {
+			break;
+		}
+		/* update buffer pointer & length to remove parsed data. */
+		data += nparsed;
+		data_len -= nparsed;
+		/* loop when there is more data to parse. */
+	} while(1);
+
+  lua_pushinteger(L, parsed_len);
+  return 1;
+}
+
 /* method: should_keep_alive */
 static int http_tokenizer__should_keep_alive__meth(lua_State *L) {
   http_tokenizer * this;
@@ -2257,6 +2450,8 @@ static const luaL_Reg obj_http_tokenizer_methods[] = {
   {"reset", http_tokenizer__reset__meth},
   {"execute", http_tokenizer__execute__meth},
   {"execute_buffer", http_tokenizer__execute_buffer__meth},
+  {"execute_offsets", http_tokenizer__execute_offsets__meth},
+  {"execute_offsets_buffer", http_tokenizer__execute_offsets_buffer__meth},
   {"should_keep_alive", http_tokenizer__should_keep_alive__meth},
   {"is_upgrade", http_tokenizer__is_upgrade__meth},
   {"method", http_tokenizer__method__meth},
