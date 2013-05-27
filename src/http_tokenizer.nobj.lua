@@ -187,7 +187,7 @@ int http_tokenizer_is_error(http_tokenizer* tokenizer);
 			local len = ${tokens}[n].len
 			if len > 0 then
 				local offset = ${tokens}[n].off
-				${cbs}(${tokens}[n].id, ffi_string(data + offset, len))
+				${cbs}(${tokens}[n].id, ffi_string(${data} + offset, len))
 			else
 				${cbs}(${tokens}[n].id)
 			end
@@ -201,7 +201,7 @@ int http_tokenizer_is_error(http_tokenizer* tokenizer);
 			break
 		end
 		-- update buffer pointer & length to remove parsed data.
-		${data} = ${data}:sub(${nparsed}+1)
+		${data} = ${data} + ${nparsed};
 		${data_len} = ${data_len} + ${nparsed}
 		-- loop when there is more data to parse.
 	until false
